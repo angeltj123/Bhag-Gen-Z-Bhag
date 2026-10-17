@@ -1,0 +1,10 @@
+{
+  "name": "bhaag-gen-z-bhaag",
+  "version": "1.0.0",
+  "description": "Bhaag Gen-Z Bhaag — 5,000 m protest march runner to Jantar Mantar, with live marches, ghost races and a global top 10.",
+  "main": "server.js",
+  "private": true,
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "pg": "8.12.0", "ws": "8.18.0" }
+}
