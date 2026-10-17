@@ -1,7 +1,7 @@
 // Ghost / leaderboard storage.
-// With DATABASE_URL set (any Postgres: Render, Neon, Supabase…) data is permanent.
-// Without it, data lives in data/ghosts.json — fine for testing, but on Render's free
-// plan that file is wiped whenever the service restarts, redeploys or sleeps.
+// With DATABASE_URL set (any Postgres: Neon, Supabase, Render…) data is permanent.
+// Without it — or if the database can't be reached — data lives in data/ghosts.json,
+// which on Render's free plan is wiped whenever the service restarts, redeploys or sleeps.
 const fs = require('fs');
 const path = require('path');
 
@@ -9,23 +9,52 @@ const mem = new Map();
 const FILE = path.join(__dirname, 'data', 'ghosts.json');
 let pool = null, timer = null;
 
-async function init() {
-  if (process.env.DATABASE_URL) {
-    const { Pool } = require('pg');
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.PGSSL === 'off' ? false : { rejectUnauthorized: false },
-      max: 4
-    });
-    await pool.query('CREATE TABLE IF NOT EXISTS ghosts (id TEXT PRIMARY KEY, body JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())');
-    const r = await pool.query('SELECT id, body FROM ghosts');
-    for (const row of r.rows) mem.set(row.id, row.body);
-    console.log('Storage: Postgres, ' + mem.size + ' players loaded');
-  } else {
-    try { for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(FILE, 'utf8')))) mem.set(k, v); } catch (e) {}
-    console.warn('WARNING: no DATABASE_URL set. Scores are kept in a temporary file and are LOST when Render restarts or the service sleeps. Add DATABASE_URL (free Neon Postgres) to keep them. ' + mem.size + ' players loaded');
-  }
+// Accepts the string however it was pasted: with quotes, a "psql" prefix, or Neon's extra options.
+function cleanDatabaseUrl(raw) {
+  let s = String(raw || '').trim();
+  s = s.replace(/^psql\s+/i, '').trim();
+  s = s.replace(/^['"]|['"]$/g, '').trim();
+  const m = s.match(/postgres(?:ql)?:\/\/\S+/i);
+  if (!m) return null;
+  try {
+    const u = new URL(m[0].replace(/['"]+$/, ''));
+    // SSL is set in the Pool options below; drop options the driver warns about or doesn't support.
+    for (const k of ['channel_binding', 'sslmode', 'sslrootcert', 'uselibpqcompat']) u.searchParams.delete(k);
+    return u.toString();
+  } catch (e) { return null; }
 }
+function hostOf(url) { try { return new URL(url).hostname; } catch (e) { return '?'; } }
+
+function loadFile() {
+  try { for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(FILE, 'utf8')))) mem.set(k, v); } catch (e) {}
+}
+
+async function init() {
+  const url = process.env.DATABASE_URL ? cleanDatabaseUrl(process.env.DATABASE_URL) : null;
+  if (process.env.DATABASE_URL && !url) {
+    console.error('DATABASE ERROR: DATABASE_URL does not look like a postgresql://… link. Paste only the link from Neon. Using temporary storage for now.');
+  }
+  if (url) {
+    try {
+      const { Pool } = require('pg');
+      pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 4, connectionTimeoutMillis: 15000 });
+      pool.on('error', e => console.error('DATABASE ERROR (idle client):', e.message));
+      await pool.query('CREATE TABLE IF NOT EXISTS ghosts (id TEXT PRIMARY KEY, body JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())');
+      const r = await pool.query('SELECT id, body FROM ghosts');
+      for (const row of r.rows) mem.set(row.id, row.body);
+      console.log('Storage: Postgres (' + hostOf(url) + '), ' + mem.size + ' players loaded');
+      return;
+    } catch (e) {
+      console.error('DATABASE ERROR: could not connect to ' + hostOf(url) + ' — ' + e.message);
+      console.error('Check the DATABASE_URL value in Render → Environment. The game keeps running with temporary storage.');
+      try { await pool.end(); } catch (_) {}
+      pool = null;
+    }
+  }
+  loadFile();
+  console.warn('WARNING: scores are in temporary storage and are LOST when Render restarts or the service sleeps. ' + mem.size + ' players loaded');
+}
+
 const all = () => mem;
 const get = id => mem.get(id) || null;
 async function put(id, body) {
@@ -41,4 +70,4 @@ async function put(id, body) {
     }, 500);
   }
 }
-module.exports = { init, all, get, put };
+module.exports = { init, all, get, put, cleanDatabaseUrl };
