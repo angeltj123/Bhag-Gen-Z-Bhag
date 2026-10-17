@@ -360,7 +360,7 @@ const speedAt=d=>Math.min(820,380+d*.011);
 let runT=0,finishRank=0;
 let mode='menu',t=0,speed=380,dist=0,flags=0,bonus=0,lives=3,meter=0,chantT=0,shake=0,spawnAt=700,ents=[],parts=[],texts=[],bubble=null,p,scroll=0,tint=0,jailT=0,freed=0,crowd=0;
 let playerName='Marcher',marchCode='jantar-mantar';
-let best=0;try{best=+localStorage.getItem('tiranga-best')||0}catch(e){}
+let best=0;try{best=+(localStorage.getItem('bgb-best')||localStorage.getItem('tiranga-best'))||0}catch(e){}
 function reset(){
   runT=0;finishRank=0;seed=hashStr(marchCode);speed=380;dist=0;flags=0;bonus=0;lives=3;meter=0;chantT=0;shake=0;spawnAt=700;ents=[];parts=[];texts=[];bubble=null;jailT=0;freed=0;freeList=[];rescued.clear();
   p={x:200,y:G,vy:0,ground:true,jumps:0,slide:false,inv:0,run:0,dodgeHeld:false};
@@ -442,7 +442,7 @@ function finalOver(win){
   if(!win)mode='over';
   sfx(win?'free':'over');
   saveGhost(win);
-  const sc=score();const nb=sc>best;if(nb){best=sc;try{localStorage.setItem('tiranga-best',best)}catch(e){}}
+  const sc=score();const nb=sc>best;if(nb){best=sc;try{localStorage.setItem('bgb-best',best)}catch(e){}}
   document.getElementById('overTitle').textContent=win?'Pahunch gaye Jantar Mantar!':'Detained!';
   document.getElementById('sScore').textContent=sc;
   document.getElementById('sFlags').textContent=flags;
@@ -637,7 +637,7 @@ async function initDb(){
     if(!window.claude||typeof window.claude.use!=='function')return;
     const [d,u]=await Promise.all([window.claude.use('db'),window.claude.use('user')]);
     db=d;if(u){try{uid=await u.id()}catch(e){uid=null}}
-    watchBoard();watchGlobal();
+    watchBoard();watchGlobal();restoreFromDevice();
   }catch(e){db=null}
 }
 initDb();
@@ -649,6 +649,31 @@ function watchBoard(){
       board=snap.docs.map(doc=>{const b=doc.data()||{},r=b.runs&&b.runs[code];return r&&typeof r==='object'?{uid:doc.id,n:b.n,c:b.c,...r}:null}).filter(Boolean).sort((a,b)=>(+b.sc||0)-(+a.sc||0));
       renderBoard();
     },()=>{board=[];renderBoard()});
+  }catch(e){}
+}
+// If the shared board lost this player's runs (e.g. a server restart), put back the ones saved on this device.
+async function restoreFromDevice(){
+  if(!db||!uid)return;
+  const runs={};let meta=null;
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);if(!k||!k.startsWith('td-ghost-'))continue;
+      const code=k.slice(9);if(!/^[a-z0-9-]{1,24}$/.test(code))continue;
+      const r=localGhost(code);if(!r||typeof r.g!=='string'||r.g.length<20)continue;
+      runs[code]={sc:+r.sc||0,d:+r.d||0,ft:typeof r.ft==='number'?r.ft:null,end:r.end==='done'?'done':'jail',g:r.g,at:+r.at||Date.now()};
+      if(!meta||runs[code].sc>meta.sc)meta={sc:runs[code].sc,n:r.n,c:r.c};
+    }
+  }catch(e){return}
+  if(!meta)return;
+  try{
+    const ref=db.doc('ghosts/'+uid),snap=await ref.get(),body=snap.exists?{...snap.data()}:{};
+    const cur={...(body.runs||{})};let changed=false;
+    for(const code of Object.keys(runs))if(!cur[code]||(+cur[code].sc||0)<runs[code].sc){cur[code]=runs[code];changed=true}
+    if(!changed)return;
+    const codes=Object.keys(cur).slice(-20),kept={};codes.forEach(k=>kept[k]=cur[k]);
+    let bc=codes[0];codes.forEach(k=>{if((+kept[k].sc||0)>(+kept[bc].sc||0))bc=k});
+    const name=(typeof body.n==='string'&&body.n)||(typeof meta.n==='string'&&meta.n)||cleanName();
+    await ref.set({n:name.slice(0,14),c:body.c||meta.c||charKey,codes,runs:kept,bestSc:+kept[bc].sc||0,best:{code:bc,sc:+kept[bc].sc||0,ft:kept[bc].ft,d:kept[bc].d},at:Date.now()});
   }catch(e){}
 }
 let globalTop=[],globalState='loading';

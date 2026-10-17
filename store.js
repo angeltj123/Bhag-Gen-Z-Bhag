@@ -23,7 +23,7 @@ async function init() {
     console.log('Storage: Postgres, ' + mem.size + ' players loaded');
   } else {
     try { for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(FILE, 'utf8')))) mem.set(k, v); } catch (e) {}
-    console.log('Storage: local file (temporary on Render free), ' + mem.size + ' players loaded');
+    console.warn('WARNING: no DATABASE_URL set. Scores are kept in a temporary file and are LOST when Render restarts or the service sleeps. Add DATABASE_URL (free Neon Postgres) to keep them. ' + mem.size + ' players loaded');
   }
 }
 const all = () => mem;
